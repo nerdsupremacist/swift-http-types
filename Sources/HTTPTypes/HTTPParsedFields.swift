@@ -21,7 +21,12 @@ struct HTTPParsedFields {
     private var path: ISOLatin1String?
     private var extendedConnectProtocol: ISOLatin1String?
     private var status: ISOLatin1String?
-    private var fields: HTTPFields = .init()
+
+    private var contentLength: ISOLatin1String?
+    private var contentDisposition: ISOLatin1String?
+    private var location: ISOLatin1String?
+
+    private var fields: HTTPFields
 
     enum ParsingError: Error {
         case invalidName
@@ -43,6 +48,18 @@ struct HTTPParsedFields {
         case multipleContentLength
         case multipleContentDisposition
         case multipleLocation
+    }
+
+    init() {
+        self.fields = .init()
+    }
+
+    init(parsed: [HTTPFields.Element]) throws {
+        self.fields = .init()
+        self.fields.reserveCapacity(parsed.count)
+        for field in parsed {
+            try self.add(field: field)
+        }
     }
 
     mutating func add(field: HTTPField) throws {
@@ -85,19 +102,26 @@ struct HTTPParsedFields {
                 throw ParsingError.invalidPseudoName
             }
         } else {
+            switch field.name {
+            case .contentLength:
+                if let contentLength = self.contentLength, contentLength != field.rawValue {
+                    throw ParsingError.multipleContentLength
+                }
+                self.contentLength = field.rawValue
+            case .contentDisposition:
+                if let contentDisposition = self.contentDisposition, contentDisposition != field.rawValue {
+                    throw ParsingError.multipleContentDisposition
+                }
+                self.contentDisposition = field.rawValue
+            case .location:
+                if let location = self.location, location != field.rawValue {
+                    throw ParsingError.multipleLocation
+                }
+                self.location = field.rawValue
+            default:
+                break
+            }
             self.fields.append(field)
-        }
-    }
-
-    private func validateFields() throws {
-        guard self.fields[values: .contentLength].allElementsSame else {
-            throw ParsingError.multipleContentLength
-        }
-        guard self.fields[values: .contentDisposition].allElementsSame else {
-            throw ParsingError.multipleContentDisposition
-        }
-        guard self.fields[values: .location].allElementsSame else {
-            throw ParsingError.multipleLocation
         }
     }
 
@@ -112,7 +136,6 @@ struct HTTPParsedFields {
             if self.status != nil {
                 throw ParsingError.requestWithResponsePseudo
             }
-            try self.validateFields()
             var request = HTTPRequest(
                 method: requestMethod,
                 scheme: self.scheme,
@@ -143,7 +166,6 @@ struct HTTPParsedFields {
             if !HTTPResponse.Status.isValidStatus(statusString) {
                 throw ParsingError.invalidStatus
             }
-            try self.validateFields()
             return HTTPResponse(status: .init(code: Int(statusString)!), headerFields: self.fields)
         }
     }
@@ -155,7 +177,6 @@ struct HTTPParsedFields {
             {
                 throw ParsingError.trailerFieldsWithPseudo
             }
-            try self.validateFields()
             return self.fields
         }
     }
@@ -183,15 +204,6 @@ extension HTTPRequest {
     }
 }
 
-extension Array where Element: Equatable {
-    fileprivate var allElementsSame: Bool {
-        guard let first = self.first else {
-            return true
-        }
-        return dropFirst().allSatisfy { $0 == first }
-    }
-}
-
 @available(HTTPTypes 1.2, *)
 extension HTTPRequest {
     /// Create an HTTP request with an array of parsed `HTTPField`. The fields must include the
@@ -200,10 +212,7 @@ extension HTTPRequest {
     /// - Parameter fields: The array of parsed `HTTPField` produced by HPACK or QPACK decoders
     ///                     used in modern HTTP versions.
     public init(parsed fields: [HTTPField]) throws {
-        var parsedFields = HTTPParsedFields()
-        for field in fields {
-            try parsedFields.add(field: field)
-        }
+        let parsedFields = try HTTPParsedFields(parsed: fields)
         self = try parsedFields.request
     }
 }
@@ -216,10 +225,7 @@ extension HTTPResponse {
     /// - Parameter fields: The array of parsed `HTTPField` produced by HPACK or QPACK decoders
     ///                     used in modern HTTP versions.
     public init(parsed fields: [HTTPField]) throws {
-        var parsedFields = HTTPParsedFields()
-        for field in fields {
-            try parsedFields.add(field: field)
-        }
+        let parsedFields = try HTTPParsedFields(parsed: fields)
         self = try parsedFields.response
     }
 }
@@ -232,10 +238,7 @@ extension HTTPFields {
     /// - Parameter fields: The array of parsed `HTTPField` produced by HPACK or QPACK decoders
     ///                     used in modern HTTP versions.
     public init(parsedTrailerFields fields: [HTTPField]) throws {
-        var parsedFields = HTTPParsedFields()
-        for field in fields {
-            try parsedFields.add(field: field)
-        }
+        let parsedFields = try HTTPParsedFields(parsed: fields)
         self = try parsedFields.trailerFields
     }
 }
