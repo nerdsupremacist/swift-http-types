@@ -57,7 +57,7 @@ public struct HTTPField: Sendable, Hashable {
     ///            Invalid bytes are converted into space characters.
     public init(name: Name, value: String) {
         self.name = name
-        self.rawValue = Self.legalizeValue(ISOLatin1String(value))
+        self.rawValue = HTTPField.Value(legalize: value)
     }
 
     /// Create an HTTP field from a name and a value.
@@ -66,7 +66,7 @@ public struct HTTPField: Sendable, Hashable {
     ///   - value: The HTTP field value. Invalid bytes are converted into space characters.
     public init(name: Name, value: some Collection<UInt8>) {
         self.name = name
-        self.rawValue = Self.legalizeValue(ISOLatin1String(value))
+        self.rawValue = HTTPField.Value(legalize: value)
     }
 
     /// Create an HTTP field from a name and a value. Leniently legalize the value.
@@ -77,10 +77,10 @@ public struct HTTPField: Sendable, Hashable {
     @available(HTTPTypes 1.1, *)
     public init(name: Name, lenientValue: some Collection<UInt8>) {
         self.name = name
-        self.rawValue = Self.lenientLegalizeValue(ISOLatin1String(lenientValue))
+        self.rawValue = HTTPField.Value(lenient: lenientValue)
     }
 
-    init(name: Name, uncheckedValue: ISOLatin1String) {
+    init(name: Name, uncheckedValue: HTTPField.Value) {
         self.name = name
         self.rawValue = uncheckedValue
     }
@@ -101,7 +101,7 @@ public struct HTTPField: Sendable, Hashable {
             self.rawValue.string
         }
         set {
-            self.rawValue = Self.legalizeValue(ISOLatin1String(newValue))
+            self.rawValue = HTTPField.Value(legalize: newValue)
         }
     }
 
@@ -123,76 +123,7 @@ public struct HTTPField: Sendable, Hashable {
     /// The strategy for whether the field is indexed in the HPACK or QPACK dynamic table.
     public var indexingStrategy: DynamicTableIndexingStrategy = .automatic
 
-    var rawValue: ISOLatin1String
-
-    private static func _isValidValue(_ bytes: some Sequence<UInt8>) -> Bool {
-        var iterator = bytes.makeIterator()
-        guard var byte = iterator.next() else {
-            // Empty string is allowed.
-            return true
-        }
-        if byte == 0x09 || byte == 0x20 {
-            // First character cannot be a space or a tab.
-            return false
-        }
-        while true {
-            switch byte {
-            case 0x09, 0x20:
-                break
-            case 0x21...0x7E, 0x80...0xFF:
-                break
-            default:
-                return false
-            }
-            if let next = iterator.next() {
-                byte = next
-            } else {
-                break
-            }
-        }
-        if byte == 0x09 || byte == 0x20 {
-            // Last character cannot be a space or a tab.
-            return false
-        }
-        return true
-    }
-
-    static func legalizeValue(_ value: ISOLatin1String) -> ISOLatin1String {
-        if self._isValidValue(value._storage.utf8) {
-            return value
-        } else {
-            let bytes = value._storage.utf8.lazy.map { byte -> UInt8 in
-                switch byte {
-                case 0x09, 0x20:
-                    return byte
-                case 0x21...0x7E, 0x80...0xFF:
-                    return byte
-                default:
-                    return 0x20
-                }
-            }
-            let trimmed = bytes.reversed().drop { $0 == 0x09 || $0 == 0x20 }.reversed().drop {
-                $0 == 0x09 || $0 == 0x20
-            }
-            return ISOLatin1String(unchecked: String(decoding: trimmed, as: UTF8.self))
-        }
-    }
-
-    static func lenientLegalizeValue(_ value: ISOLatin1String) -> ISOLatin1String {
-        if value._storage.utf8.allSatisfy({ $0 != 0x00 && $0 != 0x0A && $0 != 0x0D }) {
-            return value
-        } else {
-            let bytes = value._storage.utf8.lazy.map { byte -> UInt8 in
-                switch byte {
-                case 0x00, 0x0A, 0x0D:
-                    return 0x20
-                default:
-                    return byte
-                }
-            }
-            return ISOLatin1String(unchecked: String(decoding: bytes, as: UTF8.self))
-        }
-    }
+    var rawValue: HTTPField.Value
 
     /// Whether the string is valid for an HTTP field value based on RFC 9110.
     ///
@@ -201,7 +132,7 @@ public struct HTTPField: Sendable, Hashable {
     /// - Parameter value: The string to validate.
     /// - Returns: Whether the string is valid.
     public static func isValidValue(_ value: String) -> Bool {
-        self._isValidValue(value.utf8)
+        Self.Value.isValid(value)
     }
 
     /// Whether the byte collection is valid for an HTTP field value based on RFC 9110.
@@ -211,7 +142,7 @@ public struct HTTPField: Sendable, Hashable {
     /// - Parameter value: The byte collection to validate.
     /// - Returns: Whether the byte collection is valid.
     public static func isValidValue(_ value: some Collection<UInt8>) -> Bool {
-        self._isValidValue(value)
+        Self.Value.isValid(value)
     }
 }
 
@@ -242,7 +173,7 @@ extension HTTPField: Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.name, forKey: .name)
-        try container.encode(self.rawValue._storage, forKey: .value)
+        try container.encode(self.rawValue, forKey: .value)
         if self.indexingStrategy != .automatic {
             try container.encode(self.indexingStrategy.rawValue, forKey: .indexingStrategy)
         }
@@ -251,15 +182,8 @@ extension HTTPField: Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let name = try container.decode(Name.self, forKey: .name)
-        let value = try container.decode(String.self, forKey: .value)
-        guard value.unicodeScalars.allSatisfy({ $0.value <= UInt8.max }) && Self.isValidValue(value) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .value,
-                in: container,
-                debugDescription: "HTTP field value \"\(value)\" contains invalid characters"
-            )
-        }
-        self.init(name: name, uncheckedValue: ISOLatin1String(unchecked: value))
+        let value = try container.decode(HTTPField.Value.self, forKey: .value)
+        self.init(name: name, uncheckedValue: value)
         if let indexingStrategyValue = try container.decodeIfPresent(UInt8.self, forKey: .indexingStrategy),
             let indexingStrategy = DynamicTableIndexingStrategy(rawValue: indexingStrategyValue)
         {
@@ -316,6 +240,10 @@ extension HTTPField {
 
     static func isValidToken(_ token: Substring) -> Bool {
         Self.tokenValidity(token).isValid
+    }
+
+    static func isValidToken(_ bytes: some Collection<UInt8>) -> Bool {
+        Self.tokenValidity(bytes).isValid
     }
 
     #if compiler(>=6.3) && !(os(watchOS) && _pointerBitWidth(_32))

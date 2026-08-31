@@ -159,14 +159,14 @@ public struct HTTPResponse: Sendable, Hashable {
     /// phrase.
     public var status: Status {
         get {
-            var codeIterator = self.pseudoHeaderFields.status.rawValue._storage.utf8.makeIterator()
+            var codeIterator = self.pseudoHeaderFields.status.value.utf8.makeIterator()
             let code =
                 Int(codeIterator.next()! - 48) * 100 + Int(codeIterator.next()! - 48) * 10
                 + Int(codeIterator.next()! - 48)
             return Status(uncheckedCode: code, reasonPhrase: self.pseudoHeaderFields.reasonPhrase)
         }
         set {
-            self.pseudoHeaderFields.status.rawValue = ISOLatin1String(unchecked: newValue.fieldValue)
+            self.pseudoHeaderFields.status.rawValue = HTTPField.Value(unchecked: newValue.fieldValue)
             self.pseudoHeaderFields.reasonPhrase = newValue.reasonPhrase
         }
     }
@@ -209,7 +209,7 @@ public struct HTTPResponse: Sendable, Hashable {
             }
             set {
                 precondition(newValue.name == .status, "Cannot change pseudo-header field name")
-                precondition(Status.isValidStatus(newValue.rawValue._storage), "Invalid status code")
+                precondition(Status.isValidStatus(newValue.value), "Invalid status code")
 
                 if !isKnownUniquelyReferenced(&self._storage) {
                     self._storage = self._storage.copy()
@@ -236,7 +236,7 @@ public struct HTTPResponse: Sendable, Hashable {
 
         init(status: Status) {
             self._storage = .init(
-                status: HTTPField(name: .status, uncheckedValue: ISOLatin1String(unchecked: status.fieldValue)),
+                status: HTTPField(name: .status, uncheckedValue: HTTPField.Value(unchecked: status.fieldValue)),
                 reasonPhrase: status.reasonPhrase
             )
         }
@@ -303,10 +303,10 @@ extension HTTPResponse.PseudoHeaderFields: Codable {
                 debugDescription: "\":status\" pseudo header field is missing"
             )
         }
-        guard HTTPResponse.Status.isValidStatus(status.rawValue._storage) else {
+        guard HTTPResponse.Status.isValidStatus(status.value) else {
             throw DecodingError.dataCorruptedError(
                 in: container,
-                debugDescription: "\"\(status.rawValue._storage)\" is not a valid status code"
+                debugDescription: "\"\(status.value)\" is not a valid status code"
             )
         }
         self.init(status: status)
