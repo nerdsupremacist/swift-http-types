@@ -344,7 +344,7 @@ extension HTTPFields: Equatable {
         }
         for field in lhs._fields {
             guard let group = remaining.index(forKey: field.name.canonicalName),
-                  let candidate = remaining.values[group].popLast()
+                let candidate = remaining.values[group].popLast()
             else {
                 return false
             }
