@@ -319,9 +319,22 @@ extension HTTPFields: Equatable {
 
 extension HTTPFields: Hashable {
     public func hash(into hasher: inout Hasher) {
+        // Equality ignores the order of differently named fields, so hashing
+        // must too. Combine each name's sequence (order of same-named fields
+        // still matters), then mix those group hashes commutatively.
+        var grouped = [String: Hasher]()
+        grouped.reserveCapacity(self._fields.count)
         for field in self._fields {
-            hasher.combine(field)
+            let key = field.name.canonicalName
+            grouped[key, default: Hasher()].combine(field)
         }
+        var combined = 0
+        for nameHasher in grouped.values {
+            // HTTPField already hashes its name, so XOR the per-name sequence hashes directly.
+            combined ^= nameHasher.finalize()
+        }
+        hasher.combine(combined)
+        hasher.combine(self._fields.count)
     }
 }
 
